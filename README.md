@@ -7,6 +7,12 @@ manage tasks or services on behalf of the user.
 
 This repository is the hackathon sandbox. Its first commit is from Oct 26, 2026.
 
+## Demo
+
+Video: https://youtu.be/5m7L-owvH_c
+
+WhatsApp test number: +1 555 205 3306. Send a voice note in Spanish and the assistant replies with a voice note.
+
 ## How it works
 
 1. The user sends a WhatsApp voice note (OGG/Opus).
