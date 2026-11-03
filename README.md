@@ -71,3 +71,60 @@ Point the WhatsApp webhook to `https://<service-url>/webhook`.
 - Conversation and mental exercises only.
 - No medical advice, and no management of tasks or services.
 - When asked for anything else, the assistant says so kindly and suggests asking family or a professional.
+
+## Architecture
+
+```
+WhatsApp voice note (OGG/Opus)
+↓ WhatsApp Cloud API webhook
+index.js on Cloud Run (Node.js, Express)
+↓ ffmpeg: OGG/Opus to 16 kHz mono WAV
+Muse Voice Transcribe (Meta Model API): audio to text
+↓
+Muse Spark 1.2 (Meta Model API): reply text
+↓
+tts-service (FastAPI + MMS-TTS): text to WAV
+↓ ffmpeg: WAV to OGG/Opus
+WhatsApp voice note back to the user
+```
+
+Two deployable units: the Node.js webhook (`index.js`) and the Python TTS service (`tts-service/`). They share a secret through the `x-api-key` header (`TTS_API_KEY`).
+
+## Design decisions
+
+**Voice in, voice out.** A voice note gets a voice note back. A text message gets a text reply.
+
+**Graceful degradation.** If transcription fails, the user gets a kind request to repeat. If the model fails, the user gets an apology message. If voice synthesis fails, the reply is sent as text.
+
+**Webhook hardening.** The `X-Hub-Signature-256` header is validated with HMAC-SHA256 and a timing-safe comparison when `META_APP_SECRET` is set. Incoming message IDs are deduplicated for 10 minutes, so WhatsApp retries do not produce duplicate replies.
+
+**Bounded calls.** External HTTP calls time out at 20 s (60 s for synthesis) and ffmpeg runs time out at 30 s.
+
+**Audio pipeline.** Input is converted to 16 kHz mono PCM WAV for transcription. Output is encoded as Opus at 24 kbps (voip profile), which WhatsApp plays as a voice note.
+
+**Prompt design.** Replies are limited to 2-3 short sentences, warm and patient in tone. The assistant answers honestly that it is a virtual assistant and stays within companionship and mental exercises.
+
+**Context.** The last 6 turns per user are sent with each request.
+
+## Testing the services
+
+```bash
+# Webhook verification handshake (expects the challenge back)
+curl "http://localhost:8080/webhook?hub.mode=subscribe&hub.verify_token=$WHATSAPP_VERIFY_TOKEN&hub.challenge=123"
+
+# TTS service health and synthesis
+curl $TTS_URL/health
+curl -X POST $TTS_URL/synthesize -H "Content-Type: application/json" -H "x-api-key: $TTS_API_KEY" -d '{"text":"Hola, ¿cómo amaneció hoy?"}' --output respuesta.wav
+```
+
+## Known limitations
+
+**Voice synthesis is Spanish only.** `tts-service/` loads `facebook/mms-tts-spa`. The webhook sends a `lang` hint (es/en), but the service does not use it yet, so an English reply would be voiced by the Spanish model and be hard to understand. Next step: load `facebook/mms-tts-eng` and select the model by `lang`.
+
+**Conversation history lives in memory.** It is lost on restart and is not shared across Cloud Run instances. Next step: move it to a persistent store.
+
+**Synthesis input is capped at 600 characters** per reply.
+
+**Webhook signature validation is optional.** Set `META_APP_SECRET` in any production deployment.
+
+**Not a medical or emergency tool.** The assistant gives no medical advice and does not contact anyone on the user's behalf.
